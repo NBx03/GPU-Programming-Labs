@@ -1,0 +1,15 @@
+# build
+build/
+*.o
+*.obj
+*.exe
+lab1/sin_precision
+lab1/sin_precision_fastmath
+lab2/filters
+# temp
+bench_tmp.png
+*.log
+# results are committed, but not scratch
+results/tmp/
+PLAN.md
+DEFENSE.md
