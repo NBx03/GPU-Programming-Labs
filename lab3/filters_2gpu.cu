@@ -198,13 +198,18 @@ int main(int argc, char** argv) {
     if (f_str == "sobel") filter = Filter::Sobel;
     else if (f_str == "median") filter = Filter::Median;
 
-    int w = 0, h = 0, c = 0;
-    std::vector<uint8_t> in_img, out_img;
-    if (!read_png(in_path.c_str(), w, h, c, in_img)) {
-        std::fprintf(stderr, "Ошибка чтения PNG: %s\n", in_path.c_str());
+    Image in_img;
+    std::string err;
+    if (!read_png(in_path, in_img, err)) {
+        std::fprintf(stderr, "Ошибка чтения PNG: %s (%s)\n", in_path.c_str(), err.c_str());
         return 1;
     }
-    out_img.resize((size_t)w * h * 3);
+    int w = in_img.w;
+    int h = in_img.h;
+    Image out_img;
+    out_img.w = w;
+    out_img.h = h;
+    out_img.rgb.resize((size_t)w * h * 3);
 
     std::printf("=== Multi-GPU (2 GPUs): %s (%dx%d) ===\n", in_path.c_str(), w, h);
     for (int d = 0; d < 2; ++d) {
@@ -215,7 +220,7 @@ int main(int argc, char** argv) {
 
     GpuDevTimes times[2];
     auto t0 = std::chrono::steady_clock::now();
-    run_2gpu(filter, radius, in_img.data(), out_img.data(), w, h, times);
+    run_2gpu(filter, radius, in_img.rgb.data(), out_img.rgb.data(), w, h, times);
     auto t1 = std::chrono::steady_clock::now();
     double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
@@ -230,19 +235,22 @@ int main(int argc, char** argv) {
 
     // Сверка с CPU-эталоном для доказательства корректности
     std::vector<uint8_t> cpu_ref((size_t)w * h * 3);
-    if (filter == Filter::Blur) cpu_blur(in_img.data(), cpu_ref.data(), w, h, radius, 4);
-    else if (filter == Filter::Sobel) cpu_sobel(in_img.data(), cpu_ref.data(), w, h, 4);
-    else cpu_median(in_img.data(), cpu_ref.data(), w, h, 4);
+    if (filter == Filter::Blur) cpu_blur(in_img.rgb.data(), cpu_ref.data(), w, h, radius, 4);
+    else if (filter == Filter::Sobel) cpu_sobel(in_img.rgb.data(), cpu_ref.data(), w, h, 4);
+    else cpu_median(in_img.rgb.data(), cpu_ref.data(), w, h, 4);
 
     long long diff_bytes = 0;
     int max_diff = 0;
     for (size_t i = 0; i < cpu_ref.size(); ++i) {
-        int d = std::abs((int)out_img[i] - (int)cpu_ref[i]);
+        int d = std::abs((int)out_img.rgb[i] - (int)cpu_ref[i]);
         if (d != 0) { diff_bytes++; max_diff = std::max(max_diff, d); }
     }
     std::printf("GPU vs CPU diff: %lld bytes / max diff %d\n", diff_bytes, max_diff);
 
-    write_png(out_path.c_str(), w, h, 3, out_img);
+    if (!write_png(out_path, out_img, err)) {
+        std::fprintf(stderr, "Ошибка записи PNG: %s\n", err.c_str());
+        return 1;
+    }
     std::printf("Результат сохранен в %s\n", out_path.c_str());
     return 0;
 }
