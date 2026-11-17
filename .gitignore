@@ -6,6 +6,7 @@ build/
 lab1/sin_precision
 lab1/sin_precision_fastmath
 lab2/filters
+lab3/filters_2gpu
 # temp
 bench_tmp.png
 *.log
