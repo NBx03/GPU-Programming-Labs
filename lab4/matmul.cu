@@ -96,40 +96,52 @@ struct Result {
 };
 
 int main(int argc, char** argv) {
-    int N = 1024;
+    int M = 1024, K = 1024, N = 1024;
     int reps = 5;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--size" && i + 1 < argc) N = std::atoi(argv[++i]);
-        else if (arg == "--reps" && i + 1 < argc) reps = std::atoi(argv[++i]);
+        if (arg == "--size" && i + 1 < argc) {
+            int sz = std::atoi(argv[++i]);
+            M = sz; K = sz; N = sz;
+        } else if (arg == "--arows" && i + 1 < argc) {
+            M = std::atoi(argv[++i]);
+        } else if (arg == "--acols" && i + 1 < argc) {
+            K = std::atoi(argv[++i]);
+        } else if (arg == "--bcols" && i + 1 < argc) {
+            N = std::atoi(argv[++i]);
+        } else if (arg == "--reps" && i + 1 < argc) {
+            reps = std::atoi(argv[++i]);
+        }
     }
 
-    int M = N, K = N;
-    size_t bytes = (size_t)N * N * sizeof(float);
-    double flops = 2.0 * (double)N * (double)N * (double)N;
+    size_t bytes_A = (size_t)M * K * sizeof(float);
+    size_t bytes_B = (size_t)K * N * sizeof(float);
+    size_t bytes_C = (size_t)M * N * sizeof(float);
+    double flops = 2.0 * (double)M * (double)K * (double)N;
 
-    std::printf("Matrix: %dx%d (float), reps: %d\n", N, N, reps);
+    std::printf("Matrix A: %dx%d, Matrix B: %dx%d -> Matrix C: %dx%d (reps: %d)\n",
+                M, K, K, N, M, N, reps);
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     std::printf("Device: %s (sm_%d%d)\n\n", prop.name, prop.major, prop.minor);
 
-    std::vector<float> h_A((size_t)N * N);
-    std::vector<float> h_B((size_t)N * N);
-    std::vector<float> h_ref((size_t)N * N);
-    std::vector<float> h_out((size_t)N * N);
+    std::vector<float> h_A((size_t)M * K);
+    std::vector<float> h_B((size_t)K * N);
+    std::vector<float> h_ref((size_t)M * N);
+    std::vector<float> h_out((size_t)M * N);
 
     std::srand(12345);
     for (size_t i = 0; i < h_A.size(); ++i) h_A[i] = (float)std::rand() / RAND_MAX - 0.5f;
     for (size_t i = 0; i < h_B.size(); ++i) h_B[i] = (float)std::rand() / RAND_MAX - 0.5f;
 
     float *d_A = nullptr, *d_B = nullptr, *d_C = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_A, bytes));
-    CUDA_CHECK(cudaMalloc(&d_B, bytes));
-    CUDA_CHECK(cudaMalloc(&d_C, bytes));
+    CUDA_CHECK(cudaMalloc(&d_A, bytes_A));
+    CUDA_CHECK(cudaMalloc(&d_B, bytes_B));
+    CUDA_CHECK(cudaMalloc(&d_C, bytes_C));
 
-    CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes_A, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes_B, cudaMemcpyHostToDevice));
 
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
@@ -137,17 +149,17 @@ int main(int argc, char** argv) {
     // Эталон через cuBLAS
     run_cublas(handle, M, K, N, d_A, d_B, d_C);
     CUDA_CHECK(cudaDeviceSynchronize());
-    CUDA_CHECK(cudaMemcpy(h_ref.data(), d_C, bytes, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_ref.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
 
     dim3 block(BLOCK_SIZE, BLOCK_SIZE);
-    dim3 grid((N + block.x - 1) / block.x, (N + block.y - 1) / block.y);
+    dim3 grid((N + block.x - 1) / block.x, (M + block.y - 1) / block.y);
 
     EventTimer timer;
     std::vector<Result> results;
 
     auto get_diff = [&](const float* ptr) {
         double max_d = 0.0;
-        for (size_t i = 0; i < (size_t)N * N; ++i) {
+        for (size_t i = 0; i < (size_t)M * N; ++i) {
             double d = std::abs((double)ptr[i] - (double)h_ref[i]);
             if (d > max_d) max_d = d;
         }
@@ -167,7 +179,7 @@ int main(int argc, char** argv) {
         }
         std::sort(times.begin(), times.end());
         double t = times[times.size() / 2];
-        CUDA_CHECK(cudaMemcpy(h_out.data(), d_C, bytes, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(h_out.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
         results.push_back({"Naive (Ch.6)", t, (flops / (t * 1e-3)) / 1e9, 1.0, get_diff(h_out.data())});
     }
 
@@ -184,7 +196,7 @@ int main(int argc, char** argv) {
         }
         std::sort(times.begin(), times.end());
         double t = times[times.size() / 2];
-        CUDA_CHECK(cudaMemcpy(h_out.data(), d_C, bytes, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(h_out.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
         double sp = results[0].time_ms / t;
         results.push_back({"Shared (Ch.7)", t, (flops / (t * 1e-3)) / 1e9, sp, get_diff(h_out.data())});
     }
